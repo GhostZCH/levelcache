@@ -32,7 +32,7 @@ type device struct {
 }
 
 func newDevice(level int, conf DevConf) *device {
-	d := &device{conf: &conf, store: newStore(conf.Dir, uint64(conf.Capacity))}
+	d := &device{conf: &conf, store: newStore(conf.Dir, int64(conf.Capacity))}
 	for i := 0; i < bucketLimit; i++ {
 		d.buckets[i] = newDevBucket(conf.Dir, i)
 	}
@@ -113,14 +113,21 @@ func (d *device) get(key Hash, seg uint32) []byte {
 	return nil
 }
 
-func (d *device) add(k Hash, index uint32, v *segValue) {
+func (d *device) add(k Hash, seg uint32, data []byte) {
 	b := d.getBucket(k)
 	b.lock.Lock()
 	defer b.lock.Unlock()
+
+	block, off := d.store.add(data)
+
 	if _, ok := b.segments[k]; !ok {
 		b.segments[k] = make(map[uint32]*segValue)
 	}
-	b.segments[k][index] = v
+
+	b.segments[k][seg] = &segValue{
+		Block: block,
+		Off:   off,
+		Size:  int64(len(data))}
 }
 
 func (d *device) del(k Hash) {
