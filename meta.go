@@ -8,6 +8,7 @@ import (
 )
 
 type item struct {
+	Size     int64
 	Expire   int64
 	SegSize  uint32
 	Segments []uint32
@@ -56,13 +57,50 @@ func newMetaBucket(dir string, idx int, aux Auxiliary) *metaBucket {
 	return b
 }
 
-func (m *meta) add(k Hash, item *item, auxData interface{}) {
+func (m *meta) get(k Hash) *item {
+	b := m.getBucket(k)
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+
+	if item, ok := b.items[k]; ok {
+		return item
+	}
+	return nil
+}
+
+func (m *meta) addItem(k Hash, item *item, auxData interface{}) {
 	b := m.getBucket(k)
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 	b.items[k] = item
 	b.aux.Add(k, auxData)
+}
+
+func (m *meta) addSegment(k Hash, start, end int, write func(segIndex uint32)) {
+	b := m.getBucket(k)
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	item, ok := b.items[k]
+	if !ok {
+		return
+	}
+
+	if uint32(end-start) > item.SegSize || start%int(item.SegSize) != 0 {
+		return
+	}
+
+	s := uint32(start / int(item.SegSize))
+	for _, i := range item.Segments {
+		if s == i {
+			return
+		}
+	}
+
+	write(s)
+
+	item.Segments = append(item.Segments, s)
 }
 
 func (m *meta) del(k Hash) {

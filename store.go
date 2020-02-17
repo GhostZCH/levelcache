@@ -10,25 +10,25 @@ import (
 )
 
 const (
-	minBlockSize      uint64 = 1024 * 1024
-	maxBlockSize      uint64 = 1024 * 1024 * 1024 * 10
-	defaultBlockCount uint64 = 1024
+	minBlockSize      int64 = 1024 * 1024
+	maxBlockSize      int64 = 1024 * 1024 * 1024 * 10
+	defaultBlockCount int64 = 1024
 )
 
 type store struct {
 	dir       string
-	cap       uint64
-	size      uint64
-	blockSize uint64
-	curOff    uint64
+	cap       int64
+	size      int64
+	blockSize int64
+	curOff    int64
 	curBlock  int64
 	lock      sync.RWMutex
 	blocks    map[int64][]byte
 }
 
-func getBlockSize(capacity uint64) uint64 {
+func getBlockSize(capacity int64) int64 {
 	// blockSize = min(max(minBlockSize, capacity / defaultBlockCount), maxBlockSize)
-	size := uint64(capacity / defaultBlockCount)
+	size := int64(capacity / defaultBlockCount)
 	if size < minBlockSize {
 		size = minBlockSize
 	}
@@ -39,7 +39,7 @@ func getBlockSize(capacity uint64) uint64 {
 
 }
 
-func newStore(dir string, cap uint64) *store {
+func newStore(dir string, cap int64) *store {
 	blockSize := getBlockSize(cap)
 
 	s := &store{
@@ -60,7 +60,7 @@ func newStore(dir string, cap uint64) *store {
 		fmt.Sscanf(path, pattern, &b)
 		data := s.mmap(path, 0)
 		s.blocks[b] = data
-		s.size += uint64(len(data))
+		s.size += int64(len(data))
 	}
 
 	return s
@@ -75,7 +75,11 @@ func (s *store) get(sv *segValue) []byte {
 	return nil
 }
 
-func (s *store) alloc(size uint64) (block int64, off int64, data []byte) {
+func (s *store) add(data []byte) (block int64, off int64) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	size := int64(len(data))
 	if size > s.blockSize {
 		s.addBlock(size) // single block for big data
 	} else if size+s.curOff > s.blockSize {
@@ -85,10 +89,10 @@ func (s *store) alloc(size uint64) (block int64, off int64, data []byte) {
 	block = s.curBlock
 	off = int64(s.curOff)
 
-	data = s.blocks[s.curBlock][s.curOff : s.curOff+size]
+	copy(s.blocks[s.curBlock][s.curOff:s.curOff+size], data)
 	s.curOff += size
 
-	return block, off, data
+	return block, off
 }
 
 func (s *store) clear() (blocks []int64) {
@@ -99,7 +103,7 @@ func (s *store) clear() (blocks []int64) {
 		min, data := s.minBlock()
 		path := s.getPath(min)
 
-		s.size -= uint64(len(data))
+		s.size -= int64(len(data))
 		delete(s.blocks, min)
 		blocks = append(blocks, min)
 
@@ -129,7 +133,7 @@ func (s *store) minBlock() (min int64, data []byte) {
 	return min, data
 }
 
-func (s *store) addBlock(size uint64) {
+func (s *store) addBlock(size int64) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	s.curBlock = time.Now().UnixNano()
