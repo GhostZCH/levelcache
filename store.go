@@ -134,8 +134,6 @@ func (s *store) minBlock() (min int64, data []byte) {
 }
 
 func (s *store) addBlock(size int64) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
 	s.curBlock = time.Now().UnixNano()
 	s.blocks[s.curBlock] = s.mmap(s.getPath(s.curBlock), int64(s.blockSize))
 	s.curOff = 0

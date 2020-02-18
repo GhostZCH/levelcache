@@ -40,7 +40,7 @@ func newDevice(level int, conf DevConf) *device {
 }
 
 func newDevBucket(dir string, idx int) *devBucket {
-	metaPath := fmt.Sprintf("%s/%d-%d.bkt", dir, version, idx)
+	metaPath := fmt.Sprintf("%s/%d-%02d.bkt", dir, version, idx)
 
 	bkt := &devBucket{
 		metaPath: metaPath,
