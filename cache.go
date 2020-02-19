@@ -67,10 +67,20 @@ func (c *Cache) Dump() {
 	}
 }
 
-func (c *Cache) Get(key Hash, start int, end int) (dataList [][]byte, missSegments [][2]int) {
+func (c *Cache) levelUp(currentLevel int, key Hash, segIndex uint32, data []byte) {
+	if currentLevel >= len(c.devices)-1 {
+		return
+	}
+
+	// TODO, 更复杂的判断逻辑
+	d := c.devices[currentLevel+1]
+	d.add(key, segIndex, data)
+}
+
+func (c *Cache) Get(key Hash, start int, end int) (dataList [][]byte, hitDevs []string, missSegments [][2]int) {
 	item := c.meta.get(key)
 	if item == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	if end == -1 {
@@ -82,12 +92,16 @@ func (c *Cache) Get(key Hash, start int, end int) (dataList [][]byte, missSegmen
 
 	dataList = make([][]byte, 0)
 	missSegments = make([][2]int, 0)
+	hitDevs = make([]string, 0)
 
 	for seg := startSeg; seg <= endSeg; seg++ {
 		found := false
-		for _, d := range c.devices {
+		for lv := len(c.devices) - 1; lv >= 0; lv-- {
+			d := c.devices[lv]
 			if tmp := d.get(key, seg); tmp != nil {
 				dataList = append(dataList, tmp)
+				c.levelUp(lv, key, seg, tmp)
+				hitDevs = append(hitDevs, d.conf.Name)
 				found = true
 				break
 			}
@@ -101,7 +115,7 @@ func (c *Cache) Get(key Hash, start int, end int) (dataList [][]byte, missSegmen
 		}
 	}
 
-	return dataList, missSegments
+	return dataList, hitDevs, missSegments
 }
 
 func (c *Cache) AddItem(key Hash, expire, size int64, auxData interface{}) {

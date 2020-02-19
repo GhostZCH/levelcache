@@ -1,32 +1,14 @@
 
 
-`level cache`是一个多级的缓存库，方便将nfs,hdd,ssd,mem等分级使用实现高效划算的对较大对象缓存，例如http的文件缓存。为方便大文件的存储，该库以分片（segment）为基本的存储单元。元数据和设备管理采用分桶机制，每次访问只需锁定一个桶，具有较高的效率。
+`level cache`是一个golang编写支持分片存储的多级的缓存库。整体设计上在保障性能够用的前提下尽可能的通过设计方案简化代码实现，便于维护和二次开发。该库能够管理多种速度价格不同的设备进行对象分片的功能，实现性能和价格的平衡。`level cache`以分片为粒度进行数据的存储和热点管理，方便类似视频的数据进行分段缓存。
 
-## 设计
+## 特色功能
 
-### 对象和分片 (Item & Segment)
-
-### 设备分级 (Devices & Levels)
-
-### 桶的设计(Useage of Buckets)
-
-### 元数据结构（Meta）
-
-### 附加数据（Auxiliary）
-
-## 特点
-
-+ 支持多级缓存，level越高，缓存速度越快，体积越小，自动热点移动到高级别的缓存中
-+ 方便配置，可以挂载为linux目录的设备都可以作为缓存，配置参数相同，例如内存可以使用`/dev/shm/`
-+ 支持分片存储，根据自定义的分片大小，只存储部分内容
-+ 在按照存储key删除单个对象的基础上，支持并行批量删除功能,按照item的属性自定义是否删除
-+ 使用若干个大文件缓存大量对象，防止系统产生大量小文件，FIFO过期方式，基本man
-+ 不同设备采用相对的对象管理代码，代码简洁，易于二次开发
-+ 采用分桶逻辑，每次增删操作只需要锁定一个桶(1/256≈4‰)的数据，使用读写锁，并且只锁定读写元数据，不锁定返送数据
-+ 块文件在初始化时通过mmap加载，不需要每次索引文件系统，文件不复制到内存
-+ ...
-
-
++ 支持多级缓存，自动将热点分片移动到高级别的设备中，并优先读取
++ 任何可以挂载为linux目录的设备都可以被使用，例如内存可以使用`/dev/shm/`作为缓存路径
++ 以分片为粒度存储，方便只缓存部分数据后将对象的一部分放到更高级别的设备中
++ 调用者可以实现Auxiliary接口来存储附加对象信息，这些信息能够方便调用者进行更多的判断和统计，同时通过Auxiliary可以实现自定义批量删除，诸如按照类型，正则表达式，分组，前后缀的删除都是可以实现的
++ 块文件在初始化时通过mmap加载，合理使用可减少内存拷贝
 
 ## 接口
 
@@ -42,9 +24,9 @@
 
     // 缓存库公共配置
     type Config struct {
-        MetaDir        string
-        ActionParallel int
-        AuxFactory     AuxFactory
+        MetaDir        string       // 元数据文件存放的目录建议放在非易失存储上
+        ActionParallel int　　　　　　// 批量删除和备份元数据等批量耗时操作的并发数，建议设置为cpu数的一半
+        AuxFactory     AuxFactory　　// 产生附加数据的工厂函数,meta中的每个桶会包含一个自定义附加数据，用于方便删除
     }
 
     // 缓存对象，用于操作缓存
@@ -55,8 +37,8 @@
         Add(key Hash, auxItem interface{})
         Get(key Hash) interface{}
         Del(key Hash)
-        Load(path string)
-        Dump(path string)
+        Load(path string)　// 从指定文件加载内容，NewCache时触发，每个桶触发一次，path不同
+        Dump(path string)  // 向指定文件持久化数据，
     }
 
     // 产生附加数据的工厂函数，用作新建缓存的参数
@@ -94,11 +76,8 @@
 详见`example/main.go`
 
     type httpAuxData struct {
-        headerLen uint32
         fileType  uint32
-        expireCRC uint32
         etagCRC   uint32
-        userIDCRC uint32
         rawKey    []byte
     }
 
@@ -132,11 +111,13 @@
     }
 
     func main() {
+        // 初始化存储
         conf := cache.Config{
             MetaDir:        "/tmp/cache/meta/",
             ActionParallel: 4,
             AuxFactory:     NewHttpAux}
 
+        //　大容量存储在前，快速存储在后,最低级存储建议用非易失存储
         devices := [3]cache.DevConf{
             cache.DevConf{
                 Name:     "hdd",
@@ -148,7 +129,7 @@
                 Capacity: 100 * 1024 * 1024},
             cache.DevConf{
                 Name:     "mem",
-                Dir:      "/tmp/cache/mem/",
+                Dir:      "/tmp/cache/mem/",　//实际可以使用而 /dev/shm/xxxx/
                 Capacity: 10 * 1024 * 1024},
         }
 
@@ -160,6 +141,7 @@
             c.Dump()
         }()
 
+        // 添加一个对象
         fmt.Println("add jpg")
         jpgkey := md5.Sum([]byte("http://www.test.com/123/456/1.jpg"))
         jpg := []byte("this is 1.jpg")
@@ -167,8 +149,13 @@
             fileType: crc32.ChecksumIEEE([]byte("jpg")),
             rawKey:   []byte("http://www.test.com/123/456/1.jpg")})
         c.AddSegment(jpgkey, 0, jpg)
-        fmt.Println(c.Get(jpgkey, 0, -1))
 
+        // 热点数据升级到更快的存储中
+        fmt.Println(c.Get(jpgkey, 0, -1)) // hdd
+        fmt.Println(c.Get(jpgkey, 0, -1)) // ssd
+        fmt.Println(c.Get(jpgkey, 0, -1)) // mem
+    
+        // 添加另一个对象
         fmt.Println("add png")
         pngkey := md5.Sum([]byte("http://www.test.com/123/456/1.png"))
         png := []byte("this is 1.png")
@@ -178,6 +165,7 @@
         c.AddSegment(pngkey, 0, png)
         fmt.Println(c.Get(jpgkey, 0, -1))
 
+        //　删除类型为jpg的文件
         fmt.Println("Del jpg")
         c.DelBatch(func(aux cache.Auxiliary) []cache.Hash {
             keys := make([]cache.Hash, 0)
@@ -189,6 +177,7 @@
             return keys
         })
 
+        // 按照正则删除文件
         fmt.Println("Del regex")
         r := regexp.MustCompile(`http://www.test.com/123/.*png`)
         c.DelBatch(func(aux cache.Auxiliary) []cache.Hash {
@@ -203,10 +192,23 @@
         })
     }
 
+## 设计
+
+主要对象的结构如下
+
+![avatar](doc/level-cache.png)
+
++ Cache包含Meta和一个Device组成的数组
++ Meta用于存储item的基础信息和Aux信息，Meta被分成256个桶，对象按照key的第一个byte判断在哪个桶中。每个桶各自独立，有独立的锁，每次只锁定1/256的数据，减少批量删除和持久化操作对整个系统的影响
++ Device数组按照存储级别由低到高设置，高级别时更快的设备。每个设备主要包含两部分内容，store用于管理存储空间分配和回收。buckets用于管理segment的元数据信息，也采用了和Meta类似的分桶逻辑减少锁对系统平稳的影响。为了减少代码量，所有的Device配置都使用linux目录方式，也就是不论内存、ssd、hdd或者是nfs，都可以复用同一套管理代码，只要可以被挂载为linux目录即可
++ Store采用FIFO大文件块队列的方式进行内容存储，每个块存储若干文件，当空间不够时，会新增一个文件块并删除一个旧块
++ Auxiliary是一个由使用者实现的借口，方便调用者按照自身的业务逻辑进行批量删除等操作，每MetaBucket会实例化一个，由库保证线程安全
+
+
 ## TODO
 
 + 完善readme
++ 测试并修复bug
 + 数据统计
 + 改进热点对象加入高级别缓存逻辑
-+ rawkey可以用sqlite等数据库存储，从内存mete分离
 + 增量备份
