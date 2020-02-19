@@ -85,17 +85,19 @@ func main() {
 
 	fmt.Println("add jpg")
 	jpgkey := md5.Sum([]byte("http://www.test.com/123/456/1.jpg"))
-	fmt.Println(c.Get(jpgkey, 0, -1)) // nil, nil
+	fmt.Println(c.Get(jpgkey, 0, -1))
 	jpg := []byte("this is 1.jpg")
 	c.AddItem(jpgkey, time.Now().Unix()+3600, int64(len(jpg)), httpAuxData{
 		fileType: crc32.ChecksumIEEE([]byte("jpg")),
 		rawKey:   []byte("http://www.test.com/123/456/1.jpg")})
 	c.AddSegment(jpgkey, 0, jpg)
-	fmt.Println(c.Get(jpgkey, 0, -1))
+	fmt.Println(c.Get(jpgkey, 0, -1)) // hdd
+	fmt.Println(c.Get(jpgkey, 0, -1)) // ssd
+	fmt.Println(c.Get(jpgkey, 0, -1)) // mem
 
 	fmt.Println("add png")
 	pngkey := md5.Sum([]byte("http://www.test.com/123/456/1.png"))
-	fmt.Println(c.Get(pngkey, 0, -1)) // nil, nil
+	fmt.Println(c.Get(pngkey, 0, -1))
 	png := []byte("this is 1.png")
 	c.AddItem(pngkey, time.Now().Unix()+3600, int64(len(jpg)), httpAuxData{
 		fileType: crc32.ChecksumIEEE([]byte("png")),
