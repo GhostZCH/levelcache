@@ -12,8 +12,110 @@
 
 ## 接口
 
+### Cache操作
+
+#### NewCache 初始化一个新的缓存对象
+
+    // devices: 设备配置，级别依次升高，基本越高的设备速度应该越快
+    func NewCache(conf Config, devices []DevConf) *Cache
+
+
+#### Close() 关闭，保存文件，关闭句柄
+
+#### Dump() 保存元数据，建议周期性的调用，防止程序意外退出造成较大损失
+
+#### 示例：
+
+    conf := cache.Config{
+        MetaDir:        "/tmp/cache/meta/",
+        ActionParallel: 4,
+        AuxFactory:     NewHttpAux}
+
+    devices := [3]cache.DevConf{
+        cache.DevConf{
+            Name:     "hdd",
+            Dir:      "/tmp/cache/hdd/",
+            Capacity: 1000 * 1024 * 1024},
+        cache.DevConf{
+            Name:     "ssd",
+            Dir:      "/tmp/cache/ssd/",
+            Capacity: 100 * 1024 * 1024},
+        cache.DevConf{
+            Name:     "mem",
+            Dir:      "/tmp/cache/mem/",　//实际可以使用而 /dev/shm/xxxx/
+            Capacity: 10 * 1024 * 1024},
+    }
+
+    c := cache.NewCache(conf, devices[:])
+    defer c.Close()
+
+    go func() {
+        time.Sleep(time.Minute)
+        c.Dump()
+    }()
+
+### 对象操作
+
+#### Get
+
+    // 获得缓存对象某一部分的数据，end = -1 时表示获取到数据文件末尾,每次get后相应的数据分片可能会被调整到速度更快的缓存设备中
+    // dataList: 数据分片的列表
+    // hitDevs: 命中的
+    // missSegments: 示缺失的数据分片，每个元素[2]int的内容是对应分片的start与end
+    func (c *Cache) Get(key Hash, start int, end int) (dataList [][]byte, hitDevs []string, missSegments [][2]int) {
+
+#### AddItem
+
+    // 增加一个缓存对象，只包含基础信息，不包含缓存数据和分片
+
+    func (c *Cache) AddItem(key Hash, expire, size int64, auxData interface{})
+
+#### AddSegment
+
+    // 添加一个分片
+    func (c *Cache) AddSegment(key Hash, start int, data []byte)
+
+#### Del
+
+    // 删除一个对象，包含所属的分片
+    func (c *Cache) Del(k Hash)
+
+#### DelBatch
+
+    // 批量删除，根据设置的并行数n, 每次读锁定n个桶进行匹配返回key，之后加写锁对这些key进行单个删除
+    func (c *Cache) DelBatch(m Matcher)
+
+#### 示例
+
+    pngkey := md5.Sum([]byte("http://www.test.com/123/456/1.png"))
+
+    png := []byte("this is 1.png")
+
+    c.AddItem(pngkey, time.Now().Unix()+3600, int64(len(jpg)), httpAuxData{
+        fileType: crc32.ChecksumIEEE([]byte("png")),
+        rawKey:   []byte("http://www.test.com/123/456/1.png")})
+
+    c.AddSegment(pngkey, 0, png)
+
+    c.Del(pngkey)
+
+    c.DelBatch(func(aux cache.Auxiliary) []cache.Hash {
+        keys := make([]cache.Hash, 0)
+        for k, v := range aux.(*httpAux).datas {
+            if v.fileType == crc32.ChecksumIEEE([]byte("jpg")) {
+                keys = append(keys, k)
+            }
+        }
+        return keys
+    })
+
+### 类型定义
+
     // 存储key
     type Hash [md5.Size]byte
+
+    // 批量删除的回调函数，用于批量删除时在用户自定义数据中查找需要删除的数据，每个桶执行一次，不需要调用者加锁
+    type Matcher func(aux Auxiliary) []Hash
 
     // 设备初始化配置
     type DevConf struct {
@@ -29,8 +131,9 @@
         AuxFactory     AuxFactory　　// 产生附加数据的工厂函数,meta中的每个桶会包含一个自定义附加数据，用于方便删除
     }
 
-    // 缓存对象，用于操作缓存
-    type Cache struct
+    // 产生附加数据的工厂函数，用作新建缓存的参数
+    type AuxFactory func(idx int) Auxiliary
+
 
     // 调用者附加数据接口，由调用者根据业务情况设计数据结构实现相关的方法，不需要调用者加锁
     type Auxiliary interface {
@@ -41,35 +144,6 @@
         Dump(path string)  // 向指定文件持久化数据，
     }
 
-    // 产生附加数据的工厂函数，用作新建缓存的参数
-    type AuxFactory func(idx int) Auxiliary
-
-    // 批量删除的回调函数，用于批量删除时在用户自定义数据中查找需要删除的数据，每个桶执行一次，不需要调用者加锁
-    type Matcher func(aux Auxiliary) []Hash
-
-    // 初始化一个新的缓存对象
-    func NewCache(conf Config, devices []DevConf) *Cache 
-
-    // 关闭，保存文件，关闭句柄
-    func (c *Cache) Close()
-
-    // 保存元数据，建议周期性的调用，防止程序意外退出造成较大损失
-    func (c *Cache) Dump()
-
-    // 获得缓存对象某一部分的数据，end = -1 时表示获取到数据文件末尾,每次get后相应的数据分片可能会被调整到速度更快的缓存设备中
-    // dataList为数据分片的列表
-    // missSegments表示缺失的数据分片，每个元素[2]int的内容是对应分片的start与end
-    func (c *Cache) Get(key Hash, start int, end int) (dataList [][]byte, missSegments [][2]int)
-
-    // 增加一个缓存对象，只包含基础信息，不包含缓存数据和分片
-    func (c *Cache) AddItem(key Hash, expire, size int64, auxData interface{})
-
-    // 
-    func (c *Cache) AddSegment(key Hash, start int, data []byte)
-
-    func (c *Cache) Del(k Hash)
-
-    func (c *Cache) DelBatch(m Matcher)
 
 ## 示例
 
@@ -143,30 +217,38 @@
 
         // 添加一个对象
         fmt.Println("add jpg")
+
         jpgkey := md5.Sum([]byte("http://www.test.com/123/456/1.jpg"))
         jpg := []byte("this is 1.jpg")
+
         c.AddItem(jpgkey, time.Now().Unix()+3600, int64(len(jpg)), httpAuxData{
             fileType: crc32.ChecksumIEEE([]byte("jpg")),
             rawKey:   []byte("http://www.test.com/123/456/1.jpg")})
+
         c.AddSegment(jpgkey, 0, jpg)
 
         // 热点数据升级到更快的存储中
         fmt.Println(c.Get(jpgkey, 0, -1)) // hdd
         fmt.Println(c.Get(jpgkey, 0, -1)) // ssd
         fmt.Println(c.Get(jpgkey, 0, -1)) // mem
-    
+
         // 添加另一个对象
         fmt.Println("add png")
+
         pngkey := md5.Sum([]byte("http://www.test.com/123/456/1.png"))
         png := []byte("this is 1.png")
+
         c.AddItem(pngkey, time.Now().Unix()+3600, int64(len(jpg)), httpAuxData{
             fileType: crc32.ChecksumIEEE([]byte("png")),
             rawKey:   []byte("http://www.test.com/123/456/1.png")})
+
         c.AddSegment(pngkey, 0, png)
+
         fmt.Println(c.Get(jpgkey, 0, -1))
 
         //　删除类型为jpg的文件
         fmt.Println("Del jpg")
+
         c.DelBatch(func(aux cache.Auxiliary) []cache.Hash {
             keys := make([]cache.Hash, 0)
             for k, v := range aux.(*httpAux).datas {
@@ -179,7 +261,9 @@
 
         // 按照正则删除文件
         fmt.Println("Del regex")
+
         r := regexp.MustCompile(`http://www.test.com/123/.*png`)
+
         c.DelBatch(func(aux cache.Auxiliary) []cache.Hash {
             keys := make([]cache.Hash, 0)
             for k, v := range aux.(*httpAux).datas {
@@ -201,14 +285,21 @@
 + Cache包含Meta和一个Device组成的数组
 + Meta用于存储item的基础信息和Aux信息，Meta被分成256个桶，对象按照key的第一个byte判断在哪个桶中。每个桶各自独立，有独立的锁，每次只锁定1/256的数据，减少批量删除和持久化操作对整个系统的影响
 + Device数组按照存储级别由低到高设置，高级别时更快的设备。每个设备主要包含两部分内容，store用于管理存储空间分配和回收。buckets用于管理segment的元数据信息，也采用了和Meta类似的分桶逻辑减少锁对系统平稳的影响。为了减少代码量，所有的Device配置都使用linux目录方式，也就是不论内存、ssd、hdd或者是nfs，都可以复用同一套管理代码，只要可以被挂载为linux目录即可
-+ Store采用FIFO大文件块队列的方式进行内容存储，每个块存储若干文件，当空间不够时，会新增一个文件块并删除一个旧块
+
 + Auxiliary是一个由使用者实现的借口，方便调用者按照自身的业务逻辑进行批量删除等操作，每MetaBucket会实例化一个，由库保证线程安全
+
+
+![avatar](doc/device.png)
+
+device的内部结构如上图，只以ＨDD为例画出一个，所有device具有相同的管理逻辑
++ device内主要由segments（处于buckets内）和store组成，
++ Store采用FIFO大文件块队列的方式进行内容存储，每个块存储若干文件，当空间不够时，会新增一个文件块并删除一个旧块，新增加的存储位于文件块的末尾
 
 
 ## TODO
 
-+ 完善readme
-+ 测试并修复bug
-+ 数据统计
++ 增加测试并修复bug
 + 改进热点对象加入高级别缓存逻辑
++ 性能优化减少不必要的对象申请
++ 数据统计
 + 增量备份

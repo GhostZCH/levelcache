@@ -9,7 +9,7 @@ import (
 
 type segKey struct {
 	Key   Hash
-	Index uint32 //Segment index
+	Index uint32
 }
 
 type segValue struct {
